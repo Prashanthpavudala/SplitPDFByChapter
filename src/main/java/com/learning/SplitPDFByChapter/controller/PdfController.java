@@ -3,9 +3,11 @@ package com.learning.SplitPDFByChapter.controller;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -63,5 +65,63 @@ public class PdfController {
                 }
             }
         }
+
+
+    //limitation that it only works while only starting page of each chapter has only chapter text
+    @PostMapping(value="/split-auto", consumes="multipart/form-data")
+    public ResponseEntity<?> autoSplitPdf(@RequestPart("file") MultipartFile file) {
+        try (InputStream input = file.getInputStream();
+            PDDocument fullDoc = PDDocument.load(input)) {
+
+            List<ChapterRange> chapters = detectChapters(fullDoc);
+
+            File outputDir = new File("output");
+            outputDir.mkdirs();
+
+            for (ChapterRange chapter : chapters) {
+                try (PDDocument chapterDoc = new PDDocument()) {
+                    for (int i = chapter.getStartPage() - 1; i < chapter.getEndPage(); i++) {
+                        chapterDoc.addPage(fullDoc.getPage(i));
+                    }
+                    String outputPath = outputDir + "/" + chapter.getTitle().replaceAll("\\s+", "_") + ".pdf";
+                    chapterDoc.save(outputPath);
+                }
+            }
+
+            return ResponseEntity.ok("Auto PDF split successful.");
+        } catch (Exception e) {
+            log.error("Auto split failed", e);
+            return ResponseEntity.status(500).body("Failed to split: " + e.getMessage());
+        }
+    }
+
+
+    private List<ChapterRange> detectChapters(PDDocument document) throws IOException {
+        List<ChapterRange> chapters = new ArrayList<>();
+        PDFTextStripper stripper = new PDFTextStripper();
+
+        for (int i = 0; i < document.getNumberOfPages(); i++) {
+            stripper.setStartPage(i + 1);
+            stripper.setEndPage(i + 1);
+            String text = stripper.getText(document);
+
+            if (text.toLowerCase().matches("(?s).*chapter\\s+\\d+.*")) {
+                String title = text.lines().filter(line -> line.toLowerCase().matches("chapter\\s+\\d+.*"))
+                    .findFirst().orElse("Chapter " + (chapters.size() + 1));
+                chapters.add(new ChapterRange(-1, i + 1, title.trim()));
+            }
+        }
+
+        // Filling the end pages
+        for (int i = 0; i < chapters.size(); i++) {
+            int start = chapters.get(i).getStartPage();
+            int end = (i + 1 < chapters.size()) ? chapters.get(i + 1).getStartPage() - 1 : document.getNumberOfPages();
+            chapters.get(i).setEndPage(end);
+        }
+        log.info("chapters list : {}", chapters.toString());
+        return chapters;
+    }
+
+    
     
 }
